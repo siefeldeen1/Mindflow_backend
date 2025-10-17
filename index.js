@@ -10,6 +10,32 @@ require('dotenv').config();
 
 const crypto = require('crypto');
 
+
+const MONGODB = process.env.MONGODB_URI;
+
+if (!MONGODB) {
+    throw new Error("Please define the MONGO_URI environment variable in .env");
+}
+
+let cached = global.mongoose;
+if (!cached) {
+    cached = global.mongoose = { conn: null, promise: null };
+}
+
+async function dbConnect() {
+    if (cached.conn) return cached.conn;
+
+    if (!cached.promise) {
+        cached.promise = mongoose.connect(MONGODB, {
+            bufferCommands: false,
+        }).then((mongoose) => mongoose);
+    }
+
+    cached.conn = await cached.promise;
+    return cached.conn;
+}
+
+
 const SUPABASE_JWKS_URL = `${process.env.SUPABASE_URL}/auth/v1/.well-known/jwks.json`;
 let jwksCache = null;
 async function getSupabaseJwks() {
@@ -64,6 +90,16 @@ app.use(cors({
     credentials: true,
 }));
 
+app.use(async (req, res, next) => {
+    try {
+        await dbConnect(); // <--- this triggers or reuses the cached connection
+        next();
+    } catch (err) {
+        console.error("MongoDB connection error:", err);
+        return res.status(500).json({ error: "Database connection failed" });
+    }
+});
+
 const algorithm = 'aes-256-cbc';
 const secretKey = crypto.createHash('sha256').update(process.env.JWT_SECRET).digest(); // Reuse JWT secret or set ENCRYPTION_SECRET in .env
 
@@ -85,13 +121,8 @@ function decrypt(text) {
 
 
 
-// MongoDB Connection
-mongoose.connect(process.env.MONGODB_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-}).then(() => console.log('Connected to MongoDB')).catch((error) => {
-    console.error('MongoDB connection error:', error);
-});
+
+
 
 // Schemas
 const userSchema = new mongoose.Schema({
